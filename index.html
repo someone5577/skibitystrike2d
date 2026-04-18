@@ -1,0 +1,583 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Skibidi Strike: P2P Multiplayer</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- PeerJS for WebRTC Peer-to-Peer connections -->
+    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+    <style>
+        body, html { margin: 0; padding: 0; overflow: hidden; background-color: #111; color: white; font-family: 'Courier New', Courier, monospace; }
+        canvas { display: block; }
+        #ui-layer { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; }
+        .pointer-events-auto { pointer-events: auto; }
+        .hidden { display: none !important; }
+        
+        /* Custom Scrollbar for instructions */
+        ::-webkit-scrollbar { width: 8px; }
+        ::-webkit-scrollbar-track { background: #222; }
+        ::-webkit-scrollbar-thumb { background: #555; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #777; }
+    </style>
+</head>
+<body>
+
+    <!-- Main Menu -->
+    <div id="main-menu" class="absolute inset-0 flex flex-col items-center justify-center bg-zinc-900 z-50 pointer-events-auto">
+        <h1 class="text-6xl font-black mb-2 text-transparent bg-clip-text bg-gradient-to-r from-green-400 to-blue-500 tracking-tighter">SKIBIDI STRIKE</h1>
+        <p class="text-zinc-400 mb-8 font-bold">P2P Host-Client Edition</p>
+
+        <div class="bg-zinc-800 p-8 rounded-2xl shadow-2xl border border-zinc-700 w-full max-w-md">
+            <div id="menu-initial">
+                <button onclick="startHosting()" class="w-full bg-green-600 hover:bg-green-500 text-white font-bold py-4 px-4 rounded-xl mb-4 transition transform hover:scale-105">
+                    📷 Host Game
+                </button>
+                <div class="relative flex py-2 items-center">
+                    <div class="flex-grow border-t border-zinc-600"></div>
+                    <span class="flex-shrink-0 mx-4 text-zinc-500">OR</span>
+                    <div class="flex-grow border-t border-zinc-600"></div>
+                </div>
+                <button onclick="showJoinMenu()" class="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-4 px-4 rounded-xl mt-4 transition transform hover:scale-105">
+                    🚽 Join Game
+                </button>
+            </div>
+
+            <div id="menu-hosting" class="hidden text-center">
+                <h2 class="text-xl font-bold mb-2">You are the Host!</h2>
+                <p class="text-sm text-zinc-400 mb-4">Give this code to your friends so they can join your browser.</p>
+                <div class="bg-black p-4 rounded-lg font-mono text-3xl tracking-widest text-green-400 select-all mb-4" id="host-code-display">
+                    LOADING...
+                </div>
+                <div class="text-sm text-zinc-500 mb-6">Waiting for players to join...</div>
+                <button onclick="startGame()" class="w-full bg-green-600 hover:bg-green-500 text-white font-bold py-3 px-4 rounded-xl transition transform hover:scale-105">
+                    Start Playing!
+                </button>
+            </div>
+
+            <div id="menu-joining" class="hidden">
+                <h2 class="text-xl font-bold mb-4 text-center">Join a Game</h2>
+                <input type="text" id="join-code-input" placeholder="ENTER HOST CODE (e.g. SKIB-ABCD)" class="w-full bg-black border border-zinc-600 text-white font-mono text-center text-xl rounded-lg p-3 mb-4 uppercase">
+                <button onclick="joinGame()" id="join-btn" class="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-3 px-4 rounded-xl transition transform hover:scale-105">
+                    Connect
+                </button>
+                <button onclick="backToMain()" class="w-full mt-2 text-zinc-400 hover:text-white py-2 text-sm">
+                    Back
+                </button>
+                <p id="join-error" class="text-red-500 text-sm text-center mt-2 hidden"></p>
+            </div>
+        </div>
+
+        <div class="mt-8 text-zinc-500 text-sm max-w-md text-center">
+            <p><strong>Controls:</strong> WASD to move. Mouse to aim. Left Click to shoot.</p>
+            <p class="mt-2 text-xs">This game runs purely peer-to-peer. The host's browser acts as the server.</p>
+        </div>
+    </div>
+
+    <!-- Game Canvas -->
+    <canvas id="gameCanvas"></canvas>
+
+    <!-- In-Game UI -->
+    <div id="ui-layer" class="hidden">
+        <!-- Room Info (Top Left) -->
+        <div class="absolute top-4 left-4 bg-black bg-opacity-50 p-2 rounded text-xs font-mono">
+            Room: <span id="ui-room-code" class="text-green-400 font-bold"></span><br>
+            Role: <span id="ui-role"></span><br>
+            Players: <span id="ui-player-count">1</span>
+        </div>
+
+        <!-- Health Bar (Bottom Center) -->
+        <div class="absolute bottom-8 left-1/2 transform -translate-x-1/2 w-64">
+            <div class="bg-black border-2 border-zinc-700 h-6 rounded-full overflow-hidden relative">
+                <div id="ui-health-bar" class="bg-red-500 h-full w-full transition-all duration-200"></div>
+                <div id="ui-health-text" class="absolute inset-0 flex items-center justify-center text-xs font-bold shadow-black">100/100</div>
+            </div>
+        </div>
+
+        <!-- Scoreboard (Top Right) -->
+        <div class="absolute top-4 right-4 bg-black bg-opacity-75 p-4 rounded border border-zinc-800 min-w-[150px]">
+            <h3 class="text-sm font-bold text-zinc-400 border-b border-zinc-700 pb-1 mb-2">SCOREBOARD</h3>
+            <div id="ui-scoreboard" class="text-sm space-y-1">
+                <!-- Populated dynamically -->
+            </div>
+        </div>
+
+        <!-- Death Overlay -->
+        <div id="death-screen" class="absolute inset-0 bg-red-900 bg-opacity-40 flex flex-col items-center justify-center hidden">
+            <h1 class="text-6xl font-black text-red-500 mb-4 drop-shadow-lg">WASTED</h1>
+            <p class="text-xl">Respawning in <span id="respawn-timer">3</span>...</p>
+        </div>
+    </div>
+
+    <script>
+        // --- Game Constants & Setup ---
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const ARENA_SIZE = 2000;
+        const TICK_RATE = 1000 / 30; // 30 updates per second network tick
+        const MOVEMENT_SPEED = 6;
+        const BULLET_SPEED = 18;
+        const PLAYER_RADIUS = 25;
+        const BULLET_RADIUS = 6;
+        const SHOOT_COOLDOWN = 250; // ms
+
+        let width, height;
+        let isHost = false;
+        let myId = null;
+        let peer = null;
+        
+        // Host variables
+        let hostConnections = []; // Array of active client connections
+        let hostRoomCode = "";
+
+        // Client variables
+        let clientConnection = null;
+
+        // STUN Servers for better cross-device connection (NAT traversal)
+        const peerConfig = {
+            config: {
+                'iceServers': [
+                    { urls: 'stun:stun.l.google.com:19302' },
+                    { urls: 'stun:stun1.l.google.com:19302' },
+                    { urls: 'stun:stun2.l.google.com:19302' }
+                ]
+            }
+        };
+
+        // Input State (Local)
+        let keys = { w: false, a: false, s: false, d: false };
+        let mouse = { angle: 0, down: false };
+        let lastShootTime = 0;
+
+        // Shared Game State
+        // Players mapping: ID -> { x, y, hp, score, role ('host'|'client'), dead, respawnTimer }
+        // Bullets array: [ { x, y, vx, vy, ownerId, life } ]
+        let gameState = {
+            players: {},
+            bullets: []
+        };
+
+        // Resize handler
+        function resize() {
+            width = window.innerWidth;
+            height = window.innerHeight;
+            canvas.width = width;
+            canvas.height = height;
+        }
+        window.addEventListener('resize', resize);
+        resize();
+
+        // --- Menu Logic ---
+        function showJoinMenu() {
+            document.getElementById('menu-initial').classList.add('hidden');
+            document.getElementById('menu-joining').classList.remove('hidden');
+        }
+        function backToMain() {
+            document.getElementById('menu-joining').classList.add('hidden');
+            document.getElementById('menu-initial').classList.remove('hidden');
+            document.getElementById('join-error').classList.add('hidden');
+        }
+        function hideMenu() {
+            document.getElementById('main-menu').classList.add('hidden');
+            document.getElementById('ui-layer').classList.remove('hidden');
+            document.getElementById('ui-role').innerText = isHost ? "HOST (Camera)" : "CLIENT (Toilet)";
+            document.getElementById('ui-room-code').innerText = isHost ? hostRoomCode : document.getElementById('join-code-input').value.toUpperCase();
+        }
+
+        // --- WebRTC (PeerJS) Logic ---
+
+        // 1. Host Logic
+        function startHosting() {
+            isHost = true;
+            document.getElementById('menu-initial').classList.add('hidden');
+            document.getElementById('menu-hosting').classList.remove('hidden');
+
+            // Generate a short, readable room code
+            hostRoomCode = "SKIB-" + Math.random().toString(36).substring(2, 6).toUpperCase();
+            
+            // Add the STUN server config here
+            peer = new Peer(hostRoomCode, peerConfig);
+
+            peer.on('open', (id) => {
+                myId = id;
+                document.getElementById('host-code-display').innerText = id;
+                // Add host to game state
+                addPlayerToState(myId, 'host');
+            });
+
+            peer.on('connection', (conn) => {
+                hostConnections.push(conn);
+                updatePlayerCountUI();
+
+                conn.on('data', (data) => {
+                    // Host receives inputs from clients
+                    if (data.type === 'input' && gameState.players[conn.peer]) {
+                        gameState.players[conn.peer].inputs = data.inputs;
+                    }
+                });
+
+                conn.on('open', () => {
+                    addPlayerToState(conn.peer, 'client');
+                });
+
+                conn.on('close', () => {
+                    hostConnections = hostConnections.filter(c => c !== conn);
+                    delete gameState.players[conn.peer];
+                    updatePlayerCountUI();
+                });
+            });
+
+            peer.on('error', (err) => {
+                console.error("PeerJS Error:", err);
+                alert("Connection error occurred. Try refreshing.");
+            });
+        }
+
+        // 2. Client Logic
+        function joinGame() {
+            const hostId = document.getElementById('join-code-input').value.trim().toUpperCase();
+            if (!hostId) return;
+
+            const btn = document.getElementById('join-btn');
+            btn.innerText = "Connecting...";
+            btn.disabled = true;
+
+            isHost = false;
+            
+            // Add the STUN server config here as well
+            peer = new Peer(peerConfig);
+
+            peer.on('open', (id) => {
+                myId = id;
+                clientConnection = peer.connect(hostId, { reliable: true });
+
+                clientConnection.on('open', () => {
+                    // Successfully connected to host
+                    hideMenu();
+                    startGameLoop(); // Start local prediction/rendering loop
+                });
+
+                clientConnection.on('data', (data) => {
+                    // Client receives the absolute game state from the Host
+                    if (data.type === 'state') {
+                        gameState = data.state;
+                        updateUI();
+                    }
+                });
+
+                clientConnection.on('close', () => {
+                    alert("Disconnected from host.");
+                    window.location.reload();
+                });
+            });
+
+            peer.on('error', (err) => {
+                document.getElementById('join-error').innerText = "Could not connect. Check the code.";
+                document.getElementById('join-error').classList.remove('hidden');
+                btn.innerText = "Connect";
+                btn.disabled = false;
+            });
+        }
+
+        function updatePlayerCountUI() {
+            document.getElementById('ui-player-count').innerText = isHost ? (hostConnections.length + 1) : "?";
+        }
+
+        // --- Game Logic ---
+
+        function addPlayerToState(id, role) {
+            gameState.players[id] = {
+                id: id,
+                x: Math.random() * (ARENA_SIZE - 200) + 100,
+                y: Math.random() * (ARENA_SIZE - 200) + 100,
+                hp: 100,
+                score: 0,
+                role: role, // 'host' (Camera) or 'client' (Toilet)
+                dead: false,
+                respawnTimer: 0,
+                inputs: { w: false, a: false, s: false, d: false, angle: 0, shooting: false }
+            };
+        }
+
+        function startGame() {
+            if (!isHost) return;
+            hideMenu();
+            
+            // Host starts the authoritative game loop
+            setInterval(hostTick, TICK_RATE);
+            startGameLoop(); // Start rendering loop
+        }
+
+        // Host only: Calculates physics, collisions, and broadcasts state
+        function hostTick() {
+            // 1. Process Host's own inputs
+            if (gameState.players[myId]) {
+                gameState.players[myId].inputs = { w: keys.w, a: keys.a, s: keys.s, d: keys.d, angle: mouse.angle, shooting: mouse.down };
+            }
+
+            // 2. Update all players based on their inputs
+            for (let id in gameState.players) {
+                let p = gameState.players[id];
+                if (p.dead) {
+                    p.respawnTimer -= TICK_RATE;
+                    if (p.respawnTimer <= 0) {
+                        p.dead = false;
+                        p.hp = 100;
+                        p.x = Math.random() * (ARENA_SIZE - 200) + 100;
+                        p.y = Math.random() * (ARENA_SIZE - 200) + 100;
+                    }
+                    continue;
+                }
+
+                let dx = 0, dy = 0;
+                if (p.inputs.w) dy -= MOVEMENT_SPEED;
+                if (p.inputs.s) dy += MOVEMENT_SPEED;
+                if (p.inputs.a) dx -= MOVEMENT_SPEED;
+                if (p.inputs.d) dx += MOVEMENT_SPEED;
+
+                // Normalize diagonal movement
+                if (dx !== 0 && dy !== 0) {
+                    const length = Math.sqrt(dx*dx + dy*dy);
+                    dx = (dx/length) * MOVEMENT_SPEED;
+                    dy = (dy/length) * MOVEMENT_SPEED;
+                }
+
+                p.x = Math.max(PLAYER_RADIUS, Math.min(ARENA_SIZE - PLAYER_RADIUS, p.x + dx));
+                p.y = Math.max(PLAYER_RADIUS, Math.min(ARENA_SIZE - PLAYER_RADIUS, p.y + dy));
+
+                // Handle Shooting (Managed by Host to prevent client cheating)
+                // We use a simple property on the player object for cooldown
+                if (!p.lastShot) p.lastShot = 0;
+                if (p.inputs.shooting && Date.now() - p.lastShot > SHOOT_COOLDOWN) {
+                    p.lastShot = Date.now();
+                    gameState.bullets.push({
+                        x: p.x + Math.cos(p.inputs.angle) * PLAYER_RADIUS,
+                        y: p.y + Math.sin(p.inputs.angle) * PLAYER_RADIUS,
+                        vx: Math.cos(p.inputs.angle) * BULLET_SPEED,
+                        vy: Math.sin(p.inputs.angle) * BULLET_SPEED,
+                        ownerId: id,
+                        life: 100 // Ticks before disappearing
+                    });
+                }
+            }
+
+            // 3. Update Bullets and handle collisions
+            for (let i = gameState.bullets.length - 1; i >= 0; i--) {
+                let b = gameState.bullets[i];
+                b.x += b.vx;
+                b.y += b.vy;
+                b.life--;
+
+                let hit = false;
+                // Collision with players
+                for (let pid in gameState.players) {
+                    let p = gameState.players[pid];
+                    if (p.dead || b.ownerId === pid) continue;
+
+                    // Simple circle collision
+                    let dist = Math.hypot(b.x - p.x, b.y - p.y);
+                    if (dist < PLAYER_RADIUS + BULLET_RADIUS) {
+                        hit = true;
+                        p.hp -= 20;
+                        if (p.hp <= 0) {
+                            p.hp = 0;
+                            p.dead = true;
+                            p.respawnTimer = 3000; // 3 seconds
+                            // Reward killer
+                            if (gameState.players[b.ownerId]) {
+                                gameState.players[b.ownerId].score++;
+                            }
+                        }
+                        break;
+                    }
+                }
+
+                // Remove bullet if hit, out of bounds, or expired
+                if (hit || b.life <= 0 || b.x < 0 || b.y < 0 || b.x > ARENA_SIZE || b.y > ARENA_SIZE) {
+                    gameState.bullets.splice(i, 1);
+                }
+            }
+
+            // 4. Broadcast state to all clients
+            const stateSnapshot = JSON.stringify({ type: 'state', state: gameState });
+            hostConnections.forEach(conn => {
+                if (conn.open) conn.send(JSON.parse(stateSnapshot)); // Send parsed object to let PeerJS handle serialization
+            });
+
+            // Host also needs to update its own UI
+            updateUI();
+        }
+
+        // --- Input Handling ---
+        window.addEventListener('keydown', (e) => {
+            if (e.key === 'w' || e.key === 'W') keys.w = true;
+            if (e.key === 'a' || e.key === 'A') keys.a = true;
+            if (e.key === 's' || e.key === 'S') keys.s = true;
+            if (e.key === 'd' || e.key === 'D') keys.d = true;
+        });
+        window.addEventListener('keyup', (e) => {
+            if (e.key === 'w' || e.key === 'W') keys.w = false;
+            if (e.key === 'a' || e.key === 'A') keys.a = false;
+            if (e.key === 's' || e.key === 'S') keys.s = false;
+            if (e.key === 'd' || e.key === 'D') keys.d = false;
+        });
+
+        window.addEventListener('mousemove', (e) => {
+            // Calculate angle from center of screen (where our player always is) to mouse
+            const centerX = width / 2;
+            const centerY = height / 2;
+            mouse.angle = Math.atan2(e.clientY - centerY, e.clientX - centerX);
+        });
+
+        window.addEventListener('mousedown', (e) => { if(e.button === 0) mouse.down = true; });
+        window.addEventListener('mouseup', (e) => { if(e.button === 0) mouse.down = false; });
+
+        // --- Client Network Loop ---
+        function sendClientInput() {
+            if (!isHost && clientConnection && clientConnection.open) {
+                clientConnection.send({
+                    type: 'input',
+                    inputs: { w: keys.w, a: keys.a, s: keys.s, d: keys.d, angle: mouse.angle, shooting: mouse.down }
+                });
+            }
+        }
+
+        // --- Rendering & Update Loop ---
+        function startGameLoop() {
+            if (!isHost) {
+                setInterval(sendClientInput, TICK_RATE);
+            }
+            requestAnimationFrame(render);
+        }
+
+        function updateUI() {
+            const me = gameState.players[myId];
+            if (!me) return;
+
+            // Health Bar
+            const hpBar = document.getElementById('ui-health-bar');
+            const hpText = document.getElementById('ui-health-text');
+            hpBar.style.width = Math.max(0, me.hp) + '%';
+            hpText.innerText = `${Math.max(0, me.hp)} / 100`;
+            
+            if (me.hp > 50) hpBar.className = "bg-green-500 h-full transition-all duration-200";
+            else if (me.hp > 20) hpBar.className = "bg-yellow-500 h-full transition-all duration-200";
+            else hpBar.className = "bg-red-500 h-full transition-all duration-200";
+
+            // Death Screen
+            const deathScreen = document.getElementById('death-screen');
+            if (me.dead) {
+                deathScreen.classList.remove('hidden');
+                document.getElementById('respawn-timer').innerText = Math.ceil(me.respawnTimer / 1000);
+            } else {
+                deathScreen.classList.add('hidden');
+            }
+
+            // Scoreboard
+            const sb = document.getElementById('ui-scoreboard');
+            let sortedPlayers = Object.values(gameState.players).sort((a, b) => b.score - a.score);
+            let sbHTML = "";
+            sortedPlayers.forEach(p => {
+                let name = p.id === myId ? "You" : (p.role === 'host' ? "Host" : "Client");
+                let icon = p.role === 'host' ? '📷' : '🚽';
+                sbHTML += `<div class="flex justify-between ${p.id === myId ? 'text-green-400 font-bold' : ''}"><span>${icon} ${name}</span><span>${p.score}</span></div>`;
+            });
+            sb.innerHTML = sbHTML;
+        }
+
+        function render() {
+            const me = gameState.players[myId];
+            
+            ctx.fillStyle = '#111';
+            ctx.fillRect(0, 0, width, height);
+
+            if (me) {
+                ctx.save();
+                // Camera follows player: Translate context so player is always at center of screen
+                ctx.translate(width / 2 - me.x, height / 2 - me.y);
+
+                // Draw Arena Grid
+                ctx.strokeStyle = '#222';
+                ctx.lineWidth = 2;
+                const gridSize = 100;
+                ctx.beginPath();
+                for (let x = 0; x <= ARENA_SIZE; x += gridSize) { ctx.moveTo(x, 0); ctx.lineTo(x, ARENA_SIZE); }
+                for (let y = 0; y <= ARENA_SIZE; y += gridSize) { ctx.moveTo(0, y); ctx.lineTo(ARENA_SIZE, y); }
+                ctx.stroke();
+
+                // Draw Arena Borders
+                ctx.strokeStyle = '#ff3333';
+                ctx.lineWidth = 4;
+                ctx.strokeRect(0, 0, ARENA_SIZE, ARENA_SIZE);
+
+                // Draw Bullets (Plungers / Lasers)
+                gameState.bullets.forEach(b => {
+                    ctx.save();
+                    ctx.translate(b.x, b.y);
+                    ctx.rotate(Math.atan2(b.vy, b.vx));
+                    
+                    // Draw a simple plunger or energy blast
+                    ctx.fillStyle = '#ffcc00';
+                    ctx.beginPath();
+                    ctx.arc(0, 0, BULLET_RADIUS, 0, Math.PI * 2);
+                    ctx.fill();
+                    
+                    // Trail
+                    ctx.fillStyle = 'rgba(255, 200, 0, 0.5)';
+                    ctx.beginPath();
+                    ctx.moveTo(0, -BULLET_RADIUS);
+                    ctx.lineTo(-20, 0);
+                    ctx.lineTo(0, BULLET_RADIUS);
+                    ctx.fill();
+                    
+                    ctx.restore();
+                });
+
+                // Draw Players
+                for (let id in gameState.players) {
+                    let p = gameState.players[id];
+                    if (p.dead) continue;
+
+                    ctx.save();
+                    ctx.translate(p.x, p.y);
+                    
+                    // HP Bar above head
+                    ctx.fillStyle = '#333';
+                    ctx.fillRect(-20, -40, 40, 5);
+                    ctx.fillStyle = p.hp > 50 ? '#00ff00' : p.hp > 20 ? '#ffff00' : '#ff0000';
+                    ctx.fillRect(-20, -40, 40 * (p.hp / 100), 5);
+
+                    // Rotate player to face mouse angle (only apply angle visual to drawing)
+                    // If it's another player, we use the angle they sent via inputs
+                    ctx.rotate(p.inputs.angle);
+
+                    // Draw Entity
+                    ctx.font = "40px Arial";
+                    ctx.textAlign = "center";
+                    ctx.textBaseline = "middle";
+                    
+                    // Draw a little gun barrel pointing in the angle direction
+                    ctx.fillStyle = '#555';
+                    ctx.fillRect(15, -5, 25, 10);
+
+                    // Draw Emoji
+                    ctx.rotate(-p.inputs.angle); // Rotate back so emoji is upright
+                    ctx.fillText(p.role === 'host' ? '📷' : '🚽', 0, 0);
+
+                    // Name tag
+                    ctx.font = "12px Courier";
+                    ctx.fillStyle = id === myId ? '#00ff00' : '#ffffff';
+                    ctx.fillText(id === myId ? "YOU" : (p.role === 'host' ? "HOST" : "ENEMY"), 0, -50);
+
+                    ctx.restore();
+                }
+
+                ctx.restore(); // Restore camera translation
+            }
+
+            requestAnimationFrame(render);
+        }
+
+    </script>
+</body>
+</html>
